@@ -9,7 +9,7 @@ const STEPS = [
   {
     n: "01",
     title: "ATTACK BLIND",
-    body: "Pay 0.5 USDC and draw a hidden card from the boss's encrypted deck. You never see the weak point — only the damage.",
+    body: "Pay 0.01 USDC and draw a hidden card from the boss's encrypted deck. You never see the weak point — only the damage.",
   },
   {
     n: "02",
@@ -76,7 +76,6 @@ export default function LandingPage() {
           <BossSprite float size={12} />
         </div>
 
-        <AgentSprite float size={7} />
         <h1 className="hero-title pixel-font">FOGPOT</h1>
         <p className="hero-sub">
           A hidden boss. A shared jackpot. Every hit is a secret until the

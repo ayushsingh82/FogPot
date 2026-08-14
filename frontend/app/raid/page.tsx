@@ -5,6 +5,7 @@ import NavBar from "../components/NavBar";
 import BossSprite from "../components/BossSprite";
 import { useWallet } from "../components/WalletProvider";
 import { loadFighterStats, recordHit } from "../lib/fighterStats";
+import { playHit, playCrit, playDefeat } from "../lib/sound";
 
 type LeaderboardEntry = {
   address: string;
@@ -13,7 +14,7 @@ type LeaderboardEntry = {
 
 const MAX_HP = 10000;
 const HP_SEGMENTS = 20;
-const ATTACK_FEE_USD = 0.5;
+const ATTACK_FEE_USD = 0.01;
 
 export default function RaidPage() {
   const { address, connecting, hasProvider, connect } = useWallet();
@@ -43,7 +44,8 @@ export default function RaidPage() {
     setTimeout(() => {
       const hit = Math.floor(Math.random() * 260) + 40;
       const crit = hit > 200;
-      setHp((prev) => Math.max(0, prev - hit));
+      const hpAfter = Math.max(0, hp - hit);
+      setHp(hpAfter);
       setPoolUsd((prev) => prev + ATTACK_FEE_USD);
       setLastCrit(crit);
       setShaking(true);
@@ -57,6 +59,14 @@ export default function RaidPage() {
       const stats = recordHit(address, hit, crit);
       setMyDamage(stats.totalDamage);
       setAttacking(false);
+
+      if (hpAfter === 0) {
+        playDefeat();
+      } else if (crit) {
+        playCrit();
+      } else {
+        playHit();
+      }
     }, 500);
   }
 
@@ -120,7 +130,7 @@ export default function RaidPage() {
             : attacking
             ? "ATTACKING..."
             : address
-            ? "ATTACK (0.5 USDC)"
+            ? "ATTACK (0.01 USDC)"
             : connecting
             ? "CONNECTING..."
             : hasProvider

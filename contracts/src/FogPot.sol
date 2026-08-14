@@ -29,7 +29,7 @@ contract FogPot {
     using e for *;
 
     uint256 public constant MAX_HP = 10_000;
-    uint256 public constant ATTACK_FEE = 0.5e6; // USDC, 6 decimals
+    uint256 public constant ATTACK_FEE = 0.01e6; // USDC, 6 decimals
     uint256 public constant NORMAL_DAMAGE = 60;
     uint256 public constant CRIT_DAMAGE = 220;
 
