@@ -34,26 +34,6 @@ Most onchain "hidden information" games fake it — the state is public, only th
 | Contracts | Solidity ^0.8.24, [Foundry](https://book.getfoundry.sh) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, [viem](https://viem.sh) |
 
-## Repo structure
-
-```
-fogpot/
-├── contracts/                  Foundry project
-│   ├── foundry.toml
-│   └── src/
-│       └── FogPot.sol          Boss raid contract (Inco-encrypted HP/weak point)
-├── frontend/                   Next.js app
-│   └── app/
-│       ├── page.tsx            Landing page
-│       ├── raid/page.tsx       The raid — attack the boss, watch HP drop
-│       ├── fighter/page.tsx    Per-wallet fighter profile: rank, crit rate, best hit
-│       ├── lib/fighterStats.ts Persistent battle-stats store (localStorage, keyed by address)
-│       └── components/         Pixel sprites, nav bar, wallet connect
-└── docs/
-    ├── inco-confidentialdeck-kit.md      Inco Lightning confidential primitives reference
-    └── megapot-protocol-reference.md     Megapot contract addresses & purchase signatures
-```
-
 ## The contract
 
 [`FogPot.sol`](contracts/src/FogPot.sol) holds:
