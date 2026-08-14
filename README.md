@@ -74,6 +74,31 @@ Hit, crit, and boss-defeat effects are synthesized in-browser with the Web Audio
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, [viem](https://viem.sh) |
 | Deploy tooling | [`@inco/js`](https://docs.inco.org) for off-chain ciphertext generation, `tsx` |
 
+## How Inco and Megapot are used
+
+**Inco Lightning** — every encrypted-state primitive in the fight:
+
+| Feature | Where |
+|---|---|
+| Encrypted boss HP (`euint256`) | set in the constructor, updated every `attack()` |
+| Encrypted weak point (`euint256`) | set once in the constructor, never decrypted publicly |
+| Blind guess vs. weak point (`e.eq`) | `attack()` |
+| Crit / normal damage selection (`e.select`) | `attack()` |
+| Clamped confidential HP subtraction (`e.lt` + `e.select`) | `_sub()` |
+| Private per-player damage total, decryptable only by that player (`allow(msg.sender)`) | `encDamageDealt` mapping in `attack()` |
+| One-bit async threshold reveal (`e.reveal`) | `_maybeRequestThresholdCheck()` |
+| Signed-attestation settlement (`e.verifyDecryption`) | `settleThreshold()` |
+| Off-chain ciphertext generation for constructor args | `@inco/js` in `contracts/script/deploy.ts` |
+
+**Megapot** — where the pooled fees actually go:
+
+| Feature | Where |
+|---|---|
+| Batch ticket purchase interface | `IBatchPurchaseFacilitator.createBatchOrder(...)` |
+| Pooled USDC fees routed into a real ticket buy | `_defeatBoss()` in `FogPot.sol`, once HP hits 0 |
+| Testnet stand-in (Megapot only publishes mainnet addresses) | [`MockBatchPurchaseFacilitator.sol`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) — same interface, emits an event instead of buying real tickets |
+| Real mainnet facilitator addresses / call signatures | [`frontend/docs/megapot-protocol-reference.md`](frontend/docs/megapot-protocol-reference.md) |
+
 ## The contract
 
 [`FogPot.sol`](contracts/src/FogPot.sol) holds:
@@ -95,6 +120,9 @@ See [`frontend/docs/inco-confidentialdeck-kit.md`](frontend/docs/inco-confidenti
 |---|---|
 | [`MockBatchPurchaseFacilitator`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) | [`0xb143a7a988cb170bd9fdfc5b0418052068a33106`](https://sepolia.basescan.org/address/0xb143a7a988cb170bd9fdfc5b0418052068a33106) |
 | `FogPot` | not yet deployed |
+| Deployer wallet | [`0x918F9E253123FBE597858FfBf78Bc3Fd740E47Ed`](https://sepolia.basescan.org/address/0x918F9E253123FBE597858FfBf78Bc3Fd740E47Ed) |
+
+`MockBatchPurchaseFacilitator`'s own page has no transactions yet — nothing calls it until `FogPot` exists and its `_defeatBoss()` fires. To see the actual deployment happen onchain (gas paid, block, `Contract Creation` method), look at the deployer wallet link above instead.
 
 `FogPot` itself is blocked on a real environment issue, not a bug in this repo: Inco's two published npm packages are out of sync on Base Sepolia right now. `@inco/js`'s `Lightning.baseSepoliaTestnet()` binds to executor `0x168FDc3A...` (a v2 preview deployment), while every version of `@inco/lightning` up to `1.0.3-rc-7` hardcodes a different, older executor address for `Lib.testnet.sol` — one that doesn't appear anywhere in the JS SDK's own deployment registry. There's currently no matching pair of "Solidity library to import" + "SDK call to encrypt with" available. Deploying `FogPot` is unblocked as soon as Inco publishes a compatible pair (or confirms the right way to pin both sides to the same deployment).
 
