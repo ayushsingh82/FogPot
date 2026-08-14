@@ -238,6 +238,21 @@ body {
   color: var(--text-dim);
 }
 
+.rule-points {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rule-points li {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
 .wallet-btn-wrap {
   position: relative;
 }

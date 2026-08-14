@@ -11,26 +11,51 @@ const RULES = [
     icon: "[$]",
     title: "ATTACK COST",
     body: "Each attack costs 0.01 USDC. Nothing is refunded on a miss — every fee, hit or miss, joins one shared pool.",
+    points: [
+      "Paid in USDC, pulled from your wallet on each attack",
+      "Misses are not refunded — the fee joins the pool regardless of outcome",
+      "No cap on how many times you can attack",
+    ],
   },
   {
     icon: "[?]",
     title: "BLIND GUESS",
     body: "Every attack is a guess at the boss's hidden weak point. Guess right for a critical hit, guess wrong for normal damage — only you ever learn which one you got.",
+    points: [
+      "Your guess is encrypted before it ever leaves your browser",
+      "A critical hit deals far more damage than a normal hit",
+      "Only you can ever decrypt whether your own guess was a crit",
+    ],
   },
   {
     icon: "[E]",
     title: "ENCRYPTED HP",
     body: "Boss HP and its weak point stay encrypted onchain via Inco Lightning. The public only learns coarse milestones — 75% / 50% / 25% / defeated — never the exact HP or what caused it.",
+    points: [
+      "HP and weak point are encrypted contract state, not just hidden in the UI",
+      "The public only ever learns one-bit threshold reveals: 75% / 50% / 25% / defeated",
+      "Each threshold reveal is settled asynchronously by a signed attestation",
+    ],
   },
   {
     icon: "[P]",
     title: "SHARED POOL",
     body: "Every attack fee from every raider piles into one shared USDC pool — win or lose, it never gets refunded, only bigger.",
+    points: [
+      "One shared boss, one shared pool — not a personal instance per player",
+      "The pool only grows; there's no way to withdraw before the boss falls",
+      "Everyone in the raid is playing for the same payout",
+    ],
   },
   {
     icon: "[T]",
     title: "PAYOUT SPLIT",
     body: "When the boss falls, the entire pool batch-buys real Megapot jackpot tickets. Tickets are split across raiders in proportion to the damage each one dealt — the harder you hit, the bigger your cut.",
+    points: [
+      "Boss defeat triggers a real Megapot ticket batch-buy, not a simulated payout",
+      "Tickets are split by damage dealt, not by number of attacks",
+      "Per-raider ticket distribution follows once tickets are minted to the pool",
+    ],
   },
 ];
 
@@ -107,6 +132,11 @@ export default function NavBar() {
                       {i + 1}. {rule.title}
                     </div>
                     <div className="rule-body">{rule.body}</div>
+                    <ul className="rule-points">
+                      {rule.points.map((point) => (
+                        <li key={point}>{point}</li>
+                      ))}
+                    </ul>
                   </div>
                 </div>
               ))}

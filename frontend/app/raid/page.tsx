@@ -241,6 +241,15 @@ export default function RaidPage() {
             tickets onchain, split across raiders by damage dealt. This is a preview of that
             split — not a real payout yet.
           </div>
+          <div className="fog-note">
+            <a
+              href="https://sepolia.basescan.org/address/0xb143a7a988cb170bd9fdfc5b0418052068a33106"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View the deployed batch-purchase contract on Base Sepolia ↗
+            </a>
+          </div>
           {leaderboard.map((entry, i) => {
             const pct = (entry.damage / totalDamage) * 100;
             const payout = (boss.poolUsd * pct) / 100;

@@ -17,6 +17,25 @@ It's a raid boss, a slot machine, and a lottery pool, wired together through con
 
 No mocked reward, no simulated payout, no link-out — boss defeat triggers a live ticket purchase on Base.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    Player(["Player"]) -->|"sign once: authorize session key"| Session["Session key<br/><sub>signs every attack locally, no popup</sub>"]
+    Session -->|"attack(guessCiphertext)<br/>+ 0.01 USDC + Inco fee"| FogPot["FogPot.sol<br/>Base Sepolia"]
+    FogPot -->|"e.eq(guess, weakPoint)<br/>e.select(isCrit, CRIT, NORMAL)"| Inco["Inco Lightning<br/><sub>encrypted bossHp / weakPoint (euint256)</sub><br/><sub>encrypted per-player damage</sub>"]
+    Inco -->|"e.reveal(hp &lt; threshold)"| Threshold["Threshold check<br/><sub>one bit: 75% / 50% / 25% / defeated</sub>"]
+    Covalidator(["Covalidator"]) -->|"signed attestation"| Settle["settleThreshold()<br/><sub>e.verifyDecryption</sub>"]
+    Threshold --> Settle
+    Settle -->|"HP hits 0"| Defeat["_defeatBoss()<br/><sub>pooled USDC fees</sub>"]
+    Defeat -->|"createBatchOrder(...)"| Megapot["BatchPurchaseFacilitator<br/><sub>real Megapot jackpot tickets</sub>"]
+
+    classDef built fill:#0d2818,stroke:#4ade80,color:#eee,stroke-width:1.5px
+    classDef actor fill:#111,stroke:#888,color:#eee,stroke-width:1px
+    class FogPot,Inco,Threshold,Settle,Defeat,Megapot built
+    class Player,Session,Covalidator actor
+```
+
 ## Why it's confidential
 
 Most onchain "hidden information" games fake it — the state is public, only the UI hides it. FogPot's boss HP, weak point, and per-player damage are genuinely encrypted contract state:
