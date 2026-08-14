@@ -118,11 +118,13 @@ See [`frontend/docs/inco-confidentialdeck-kit.md`](frontend/docs/inco-confidenti
 
 | Contract | Address |
 |---|---|
-| [`MockBatchPurchaseFacilitator`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) | [`0xb143a7a988cb170bd9fdfc5b0418052068a33106`](https://sepolia.basescan.org/address/0xb143a7a988cb170bd9fdfc5b0418052068a33106) |
-| `FogPot` | not yet deployed |
+| [`MockBatchPurchaseFacilitator`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) | [`0x4beead16648d266643cbc6daa6d477d464ae77cf`](https://sepolia.basescan.org/address/0x4beead16648d266643cbc6daa6d477d464ae77cf) |
+| [`FogPot`](contracts/src/FogPot.sol) | [`0xee26603074cab8f365df973c50c24362e5c3558c`](https://sepolia.basescan.org/address/0xee26603074cab8f365df973c50c24362e5c3558c) |
 | Deployer wallet | [`0x918F9E253123FBE597858FfBf78Bc3Fd740E47Ed`](https://sepolia.basescan.org/address/0x918F9E253123FBE597858FfBf78Bc3Fd740E47Ed) |
 
-`MockBatchPurchaseFacilitator`'s own page has no transactions yet — nothing calls it until `FogPot` exists and its `_defeatBoss()` fires. To see the actual deployment happen onchain (gas paid, block, `Contract Creation` method), look at the deployer wallet link above instead.
+Verified live: `revealedHpPct()` reads `100` and `bossDefeated()` reads `false` right after deploy — the encrypted boss state is real, not a placeholder.
+
+`FogPot` was previously blocked by what looked like an Inco package version-skew, but the real cause was two bugs on our side, now fixed: `FogPot.sol` imported `@inco/lightning/src/Lib.sol` — which hardcodes the **mainnet** Inco Lightning address — instead of `Lib.testnet.sol`, and `@inco/js` was pinned to `^0.7.12`, whose `Lightning.baseSepoliaTestnet()` resolved to an unrelated v2-preview executor. Pinning `@inco/js` to `1.0.0-testnet-1` (whose Base Sepolia deployment now matches `Lib.testnet.sol`'s hardcoded executor) and switching the contract's import to `Lib.testnet.sol` made both sides agree, and the deploy went through cleanly on the first real attempt.
 
 `FogPot` itself is blocked on a real environment issue, not a bug in this repo: Inco's two published npm packages are out of sync on Base Sepolia right now. `@inco/js`'s `Lightning.baseSepoliaTestnet()` binds to executor `0x168FDc3A...` (a v2 preview deployment), while every version of `@inco/lightning` up to `1.0.3-rc-7` hardcodes a different, older executor address for `Lib.testnet.sol` — one that doesn't appear anywhere in the JS SDK's own deployment registry. There's currently no matching pair of "Solidity library to import" + "SDK call to encrypt with" available. Deploying `FogPot` is unblocked as soon as Inco publishes a compatible pair (or confirms the right way to pin both sides to the same deployment).
 
@@ -165,4 +167,4 @@ tsx script/deploy.ts
 
 ## Status
 
-Built during the Inco Summer Game Jam. Two things are genuinely real right now: `FogPot.sol` compiles clean against the real Inco Lightning + OpenZeppelin dependencies, and the `@inco/js` encryption pipeline for its constructor args has been verified against Base Sepolia. What's still simulated: the live `/raid` page attacks a shared boss held in the Next.js server's memory (see [Multiplayer](#multiplayer)), not the deployed contract — real damage rolls, a real shared fight, real signature-verified session keys, but not yet an onchain transaction. Wiring `/raid` to call `attack()` on the deployed contract directly (client-side Inco encryption of each guess, polling `settleThreshold`) is the next step once the contract is live.
+Built during the Inco Summer Game Jam. `FogPot` is deployed and live on Base Sepolia (see [Deployed contract](#deployed-contract) above) with real encrypted boss state (`revealedHpPct() == 100`, `bossDefeated() == false`, confirmed by reading the contract directly). What's still simulated: the live `/raid` page attacks a shared boss held in the Next.js server's memory (see [Multiplayer](#multiplayer)), not the deployed contract — real damage rolls, a real shared fight, real signature-verified session keys, but not yet an onchain transaction. Wiring `/raid` to call `attack()` on the deployed contract directly (client-side Inco encryption of each guess, polling `settleThreshold`) is the next step now that the contract is live.

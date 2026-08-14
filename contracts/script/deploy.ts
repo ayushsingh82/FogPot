@@ -23,7 +23,7 @@ if (!RPC_URL || !PRIVATE_KEY) {
 }
 
 const USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
-const INCO_LIGHTNING_ADDRESS = "0x4b9911b0191B0b6a6eA8F2Ed562e20Cff5AC8624" as const;
+const INCO_LIGHTNING_ADDRESS = "0xe9CB49A5b16C6D4a093E5900AA8b450FD40541B6" as const; // Lib.testnet.sol's `inco`, Base Sepolia
 const INCO_FEE_ABI = [
   { type: "function", name: "getFee", stateMutability: "pure", inputs: [], outputs: [{ type: "uint256" }] },
 ] as const;
