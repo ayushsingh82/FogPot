@@ -42,7 +42,7 @@ const FEATURES = [
   {
     icon: "[$]",
     title: "REAL PAYOUT",
-    body: "Boss defeat triggers a live Megapot batch ticket buy on Base, split by damage dealt. Not a mock, not a simulated reward, not a link-out.",
+    body: "Boss defeat triggers a live Megapot batch ticket buy on Base, split by damage dealt.",
   },
 ];
 

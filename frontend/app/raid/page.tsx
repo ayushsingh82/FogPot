@@ -11,12 +11,6 @@ type LeaderboardEntry = {
   damage: number;
 };
 
-const MOCK_LEADERBOARD: LeaderboardEntry[] = [
-  { address: "0x8f2a...c19d", damage: 4820 },
-  { address: "0x1b90...77ae", damage: 3110 },
-  { address: "0xd44c...2f01", damage: 2495 },
-];
-
 const MAX_HP = 10000;
 const HP_SEGMENTS = 20;
 const ATTACK_FEE_USD = 0.5;
@@ -26,10 +20,13 @@ export default function RaidPage() {
   const [hp, setHp] = useState(MAX_HP);
   const [attacking, setAttacking] = useState(false);
   const [shaking, setShaking] = useState(false);
+  const [lastCrit, setLastCrit] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
-  const [leaderboard] = useState(MOCK_LEADERBOARD);
   const [myDamage, setMyDamage] = useState(0);
   const [poolUsd, setPoolUsd] = useState(0);
+  const [hitPopup, setHitPopup] = useState<{ key: number; value: number; crit: boolean } | null>(
+    null
+  );
 
   useEffect(() => {
     if (!address) return;
@@ -48,8 +45,10 @@ export default function RaidPage() {
       const crit = hit > 200;
       setHp((prev) => Math.max(0, prev - hit));
       setPoolUsd((prev) => prev + ATTACK_FEE_USD);
+      setLastCrit(crit);
       setShaking(true);
       setTimeout(() => setShaking(false), 300);
+      setHitPopup({ key: Date.now(), value: hit, crit });
       setLastResult(
         crit
           ? `CRITICAL HIT! Weak point found — ${hit} dmg`
@@ -60,6 +59,9 @@ export default function RaidPage() {
       setAttacking(false);
     }, 500);
   }
+
+  const leaderboard: LeaderboardEntry[] =
+    address && myDamage > 0 ? [{ address, damage: myDamage }] : [];
 
   const hpPct = Math.round((hp / MAX_HP) * 100);
   const filledSegments = Math.round((hp / MAX_HP) * HP_SEGMENTS);
@@ -73,7 +75,14 @@ export default function RaidPage() {
         <div className="boss-name">CONFIDENTIAL RAID BOSS</div>
         <div className="boss-title">THE DARK POOL</div>
 
-        <BossSprite shaking={shaking} />
+        <BossSprite shaking={shaking} crit={lastCrit} float={!shaking}>
+          {hitPopup && (
+            <div key={hitPopup.key} className={`dmg-popup${hitPopup.crit ? " crit" : ""}`}>
+              {hitPopup.crit ? "CRIT! " : "+"}
+              {hitPopup.value}
+            </div>
+          )}
+        </BossSprite>
 
         <div className="hp-bar-track">
           {Array.from({ length: HP_SEGMENTS }).map((_, i) => (
@@ -133,11 +142,16 @@ export default function RaidPage() {
         <div className="section-title">
           <span className="badge">DAMAGE LEADERBOARD</span>
         </div>
+        {leaderboard.length === 0 && (
+          <div className="fog-note">No attacks landed yet — connect and swing first.</div>
+        )}
         {leaderboard.map((entry, i) => (
           <div className="leaderboard-row" key={entry.address}>
             <span>
               <span className="leaderboard-rank">#{i + 1}</span>
-              <span className="leaderboard-addr">{entry.address}</span>
+              <span className="leaderboard-addr">
+                {entry.address.slice(0, 6)}...{entry.address.slice(-4)}
+              </span>
             </span>
             <span className="leaderboard-dmg">{entry.damage.toLocaleString()} dmg</span>
           </div>

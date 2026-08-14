@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 // 10x8 pixel sprite: '.' transparent, 'D' outline, 'B' body, 'E' eye white, 'P' pupil
 const BOSS_SPRITE = [
   ".DDDDDDDD.",
@@ -22,17 +24,24 @@ const SPRITE_COLORS: Record<string, string> = {
 
 export default function BossSprite({
   shaking = false,
+  crit = false,
   float = false,
   size = 8,
+  children,
 }: {
   shaking?: boolean;
+  crit?: boolean;
   float?: boolean;
   size?: number;
+  children?: ReactNode;
 }) {
   return (
     <div className="sprite-wrap">
+      {children}
       <div
-        className={`sprite-grid${shaking ? " shake" : ""}${float ? " float" : ""}`}
+        className={`sprite-grid${shaking ? " shake" : ""}${
+          shaking && crit ? " crit" : ""
+        }${float ? " float" : ""}`}
         style={{
           gridTemplateColumns: `repeat(10, ${size}px)`,
           gridTemplateRows: `repeat(8, ${size}px)`,
