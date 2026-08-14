@@ -15,6 +15,7 @@ type WalletState = {
   error: string | null;
   connect: () => Promise<void>;
   disconnect: () => void;
+  signMessage: (message: string) => Promise<string>;
 };
 
 const WalletContext = createContext<WalletState | null>(null);
@@ -86,9 +87,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setAddress(null);
   }, []);
 
+  const signMessage = useCallback(
+    async (message: string) => {
+      const eth = getEthereum();
+      if (!eth || !address) throw new Error("wallet not connected");
+      return eth.request({
+        method: "personal_sign",
+        params: [message, address],
+      });
+    },
+    [address]
+  );
+
   return (
     <WalletContext.Provider
-      value={{ address, connecting, hasProvider, error, connect, disconnect }}
+      value={{ address, connecting, hasProvider, error, connect, disconnect, signMessage }}
     >
       {children}
     </WalletContext.Provider>
