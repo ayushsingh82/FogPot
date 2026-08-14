@@ -647,13 +647,33 @@ body {
   top: 42%;
   left: 28px;
   z-index: 5;
-  animation: wander 6s ease-in-out infinite;
+  animation: wanderLeft 10s ease-in-out infinite;
   pointer-events: none;
 }
 
-@keyframes wander {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-36px); }
+.mascot-wander.right {
+  left: auto;
+  right: 28px;
+  top: 30%;
+  animation: wanderRight 13s ease-in-out infinite;
+}
+
+@keyframes wanderLeft {
+  0% { transform: translate(0, 0); }
+  22% { transform: translate(14px, -22px); }
+  41% { transform: translate(-8px, -44px); }
+  63% { transform: translate(16px, -30px); }
+  84% { transform: translate(-10px, -8px); }
+  100% { transform: translate(0, 0); }
+}
+
+@keyframes wanderRight {
+  0% { transform: translate(0, 0); }
+  18% { transform: translate(-16px, -18px); }
+  37% { transform: translate(10px, -38px); }
+  58% { transform: translate(-18px, -52px); }
+  79% { transform: translate(8px, -20px); }
+  100% { transform: translate(0, 0); }
 }
 
 @media (max-width: 1300px) {

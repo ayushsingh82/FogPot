@@ -58,6 +58,9 @@ export default function LandingPage() {
       <div className="mascot-wander" aria-hidden="true">
         <AgentSprite float size={9} />
       </div>
+      <div className="mascot-wander right" aria-hidden="true">
+        <BossSprite float size={9} />
+      </div>
 
       <NavBar />
 
