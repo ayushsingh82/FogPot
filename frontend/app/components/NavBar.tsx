@@ -15,6 +15,9 @@ export default function NavBar() {
         <Link href="/raid" className="nav-link">
           RAID
         </Link>
+        <Link href="/fighter" className="nav-link">
+          FIGHTER
+        </Link>
         <button className="connect-btn" onClick={connect} disabled={connecting}>
           {address
             ? `${address.slice(0, 6)}...${address.slice(-4)}`

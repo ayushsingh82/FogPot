@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import NavBar from "../components/NavBar";
 import BossSprite from "../components/BossSprite";
 import { useWallet } from "../components/WalletProvider";
+import { loadFighterStats, recordHit } from "../lib/fighterStats";
 
 type LeaderboardEntry = {
   address: string;
@@ -30,6 +31,11 @@ export default function RaidPage() {
   const [myDamage, setMyDamage] = useState(0);
   const [poolUsd, setPoolUsd] = useState(0);
 
+  useEffect(() => {
+    if (!address) return;
+    setMyDamage(loadFighterStats(address).totalDamage);
+  }, [address]);
+
   function attack() {
     if (!address) {
       connect();
@@ -39,16 +45,18 @@ export default function RaidPage() {
     setLastResult(null);
     setTimeout(() => {
       const hit = Math.floor(Math.random() * 260) + 40;
+      const crit = hit > 200;
       setHp((prev) => Math.max(0, prev - hit));
-      setMyDamage((prev) => prev + hit);
       setPoolUsd((prev) => prev + ATTACK_FEE_USD);
       setShaking(true);
       setTimeout(() => setShaking(false), 300);
       setLastResult(
-        hit > 200
+        crit
           ? `CRITICAL HIT! Weak point found — ${hit} dmg`
           : `You dealt ${hit} damage to the hidden boss.`
       );
+      const stats = recordHit(address, hit, crit);
+      setMyDamage(stats.totalDamage);
       setAttacking(false);
     }, 500);
   }
