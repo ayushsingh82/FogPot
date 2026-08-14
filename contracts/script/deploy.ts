@@ -23,6 +23,10 @@ if (!RPC_URL || !PRIVATE_KEY) {
 }
 
 const USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
+const INCO_LIGHTNING_ADDRESS = "0x4b9911b0191B0b6a6eA8F2Ed562e20Cff5AC8624" as const;
+const INCO_FEE_ABI = [
+  { type: "function", name: "getFee", stateMutability: "pure", inputs: [], outputs: [{ type: "uint256" }] },
+] as const;
 const MAX_HP = 10000n;
 const INITIAL_WEAK_POINT = 1n; // arbitrary index in [0, 3)
 const SOURCE = "0x0000000000000000000000000000000000000000000000000000000000000001" as const;
@@ -66,12 +70,22 @@ async function main() {
   });
   console.log("Encrypted initial HP and weak point.");
 
-  // 4. Deploy FogPot.
+  // 4. Deploy FogPot. The constructor calls newEuint256() twice, each costing the Inco
+  //    protocol fee paid from FogPot's own balance — send it along as constructor value.
+  const incoFee = await publicClient.readContract({
+    address: INCO_LIGHTNING_ADDRESS,
+    abi: INCO_FEE_ABI,
+    functionName: "getFee",
+  });
+  const deployValue = incoFee * 2n;
+  console.log("Inco fee per op:", incoFee, "wei — sending", deployValue, "wei with deployment.");
+
   const fogpot = loadArtifact("out/FogPot.sol/FogPot.json");
   const fogpotHash = await walletClient.deployContract({
     abi: fogpot.abi,
     bytecode: fogpot.bytecode,
     args: [USDC_BASE_SEPOLIA, facilitatorAddress, SOURCE, hpCiphertext, weakPointCiphertext],
+    value: deployValue,
   });
   const fogpotReceipt = await publicClient.waitForTransactionReceipt({ hash: fogpotHash });
   const fogpotAddress = fogpotReceipt.contractAddress!;

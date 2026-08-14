@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import {euint256, ebool, e} from "@inco/lightning/src/Lib.sol";
+import {euint256, ebool, e, inco} from "@inco/lightning/src/Lib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IBatchPurchaseFacilitator {
@@ -66,7 +66,10 @@ contract FogPot {
         bytes32 _source,
         bytes memory _initialHpCiphertext,
         bytes memory _initialWeakPointCiphertext
-    ) {
+    ) payable {
+        // newEuint256() below costs the Inco protocol fee, paid from this contract's own
+        // balance — it must arrive as msg.value since the constructor has no other funds yet.
+        require(msg.value >= 2 * inco.getFee(), "insufficient inco fee");
         usdc = IERC20(_usdc);
         batchPurchaseFacilitator = IBatchPurchaseFacilitator(_batchPurchaseFacilitator);
         source = _source;
@@ -78,8 +81,10 @@ contract FogPot {
     }
 
     /// @param guessCiphertext an encrypted guess at the weak point index [0, 3)
-    function attack(bytes memory guessCiphertext) external {
+    /// @dev payable: forwards the Inco protocol fee for encrypting `guessCiphertext`.
+    function attack(bytes memory guessCiphertext) external payable {
         require(!bossDefeated, "boss already defeated");
+        require(msg.value >= inco.getFee(), "insufficient inco fee");
         require(usdc.transferFrom(msg.sender, address(this), ATTACK_FEE), "usdc transferFrom failed");
         pooledFees += ATTACK_FEE;
 
