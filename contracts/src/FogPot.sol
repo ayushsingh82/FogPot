@@ -160,6 +160,25 @@ contract FogPot {
         }
     }
 
+    /// @notice The full raider list, for a frontend to render without paging through
+    /// the public `attackers(uint256)` array getter one index at a time.
+    function getAttackers() external view returns (address[] memory) {
+        return attackers;
+    }
+
+    /// @notice A player's own cumulative-damage handle. Only that player was ever
+    /// `allow()`-ed to decrypt it (see `attack()`) — exposing the handle itself is safe,
+    /// it's an opaque ciphertext reference, not the value.
+    function damageHandleOf(address player) external view returns (euint256) {
+        return encDamageDealt[player];
+    }
+
+    /// @notice The handle behind the currently outstanding threshold check, so a
+    /// frontend can fetch its covalidator attestation and call `settleThreshold`.
+    function pendingThresholdCheckHandle() external view returns (ebool) {
+        return pendingThresholdHandle;
+    }
+
     function _defeatBoss() private {
         bossDefeated = true;
 

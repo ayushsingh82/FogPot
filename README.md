@@ -47,17 +47,19 @@ Most onchain "hidden information" games fake it — the state is public, only th
 
 ## Multiplayer
 
-FogPot is one shared boss, not per-player instances — everyone who opens `/raid` is fighting the same fight. The frontend polls a shared boss state every 1.5s, so two browsers (or two thousand) watch the same HP bar drop in real time and show up on the same damage leaderboard. This shared state currently lives in the Next.js server (see [Status](#status) below on what that means for production).
+FogPot is one shared boss, not per-player instances — everyone who opens `/raid` is fighting the same fight, and it's the real deployed `FogPot` contract on Base Sepolia that holds that shared state, not a server. The frontend polls the contract directly every 4s (`revealedHpPct`, `bossDefeated`, `pooledFees`, `getAttackers`), so two browsers (or two thousand) watch the same onchain HP bar drop in real time.
 
-## Session keys
+## Attacking onchain
 
-Signing every single attack with your main wallet would mean a MetaMask popup per hit — real friction for a game meant to be played fast. Instead:
+Every attack on `/raid` is a real transaction against the deployed `FogPot` contract, wired end-to-end client-side:
 
-1. Your wallet signs **one** off-chain message authorizing a locally-generated burner key for the next hour.
-2. That burner key signs every subsequent attack itself, entirely client-side — no further popups.
-3. The server verifies both signatures on every attack: that your wallet really authorized this burner key (`recoverMessageAddress` against the authorization message), and that this specific attack was really signed by that key — plus a nonce check to reject replayed signatures.
+1. One-time `USDC.approve()` for the contract, if your allowance is too low.
+2. A blind guess (a random index in `[0, 3)`) is encrypted client-side via `@inco/js`, bound to your address and the `FogPot` contract address.
+3. `attack(guessCiphertext)` is sent with the Inco per-op fee attached, paying the 0.01 USDC fee and landing a genuinely blind, encrypted guess onchain.
+4. If that attack (or someone else's) left a threshold check pending, the frontend fetches the covalidator-signed attestation for it (`lightning.attestedReveal`) and calls `settleThreshold` — permissionless, so whoever gets there first can advance the public HP bucket.
+5. Your own cumulative damage stays encrypted; hit "REVEAL MY DAMAGE" to sign an authorization (`lightning.attestedDecrypt`, no gas) and decrypt just your own `encDamageDealt` handle — nobody else's.
 
-This is a lightweight alternative to full ERC-4337 account abstraction: no bundler, no paymaster, no smart-contract wallet — just a locally-held keypair and two verified signatures. See [`lib/sessionKey.ts`](frontend/app/lib/sessionKey.ts) and [`api/boss/attack/route.ts`](frontend/app/api/boss/attack/route.ts).
+Because `attack()` moves real USDC and pays a real Inco fee from `msg.sender`, this needs your actual wallet's signature on every hit — there's no way to preserve a silent, no-popup session-key flow without adding meta-transaction support to the contract (see [`lib/sessionKey.ts`](frontend/app/lib/sessionKey.ts) / [`api/boss/attack/route.ts`](frontend/app/api/boss/attack/route.ts), which implement that session-key pattern against a simulated in-memory boss and are currently unused by `/raid`).
 
 ## Sound
 
@@ -73,6 +75,7 @@ Hit, crit, and boss-defeat effects are synthesized in-browser with the Web Audio
 | Contracts | Solidity ^0.8.29, [Foundry](https://book.getfoundry.sh) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, [viem](https://viem.sh) |
 | Deploy tooling | [`@inco/js`](https://docs.inco.org) for off-chain ciphertext generation, `tsx` |
+| Onchain frontend | [`@inco/js`](https://docs.inco.org) client-side in `/raid` for guess encryption, threshold-reveal attestations, and per-player damage decryption |
 
 ## How Inco and Megapot are used
 
@@ -118,15 +121,13 @@ See [`frontend/docs/inco-confidentialdeck-kit.md`](frontend/docs/inco-confidenti
 
 | Contract | Address |
 |---|---|
-| [`MockBatchPurchaseFacilitator`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) | [`0x4beead16648d266643cbc6daa6d477d464ae77cf`](https://sepolia.basescan.org/address/0x4beead16648d266643cbc6daa6d477d464ae77cf) |
-| [`FogPot`](contracts/src/FogPot.sol) | [`0xee26603074cab8f365df973c50c24362e5c3558c`](https://sepolia.basescan.org/address/0xee26603074cab8f365df973c50c24362e5c3558c) |
+| [`MockBatchPurchaseFacilitator`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) | [`0xab1a3c1c619acc63c8ee8e9252a8b2d9352c37f8`](https://sepolia.basescan.org/address/0xab1a3c1c619acc63c8ee8e9252a8b2d9352c37f8) |
+| [`FogPot`](contracts/src/FogPot.sol) | [`0xf703704ab36dfb9f12201de5eb60c708744bcf2e`](https://sepolia.basescan.org/address/0xf703704ab36dfb9f12201de5eb60c708744bcf2e) |
 | Deployer wallet | [`0x918F9E253123FBE597858FfBf78Bc3Fd740E47Ed`](https://sepolia.basescan.org/address/0x918F9E253123FBE597858FfBf78Bc3Fd740E47Ed) |
 
-Verified live: `revealedHpPct()` reads `100` and `bossDefeated()` reads `false` right after deploy — the encrypted boss state is real, not a placeholder.
+Verified live: `revealedHpPct()` reads `100` and `bossDefeated()` reads `false` right after deploy, and `/raid` is wired to call `attack()` on this exact contract (see [Attacking onchain](#attacking-onchain) above) — this isn't a placeholder deployment.
 
-`FogPot` was previously blocked by what looked like an Inco package version-skew, but the real cause was two bugs on our side, now fixed: `FogPot.sol` imported `@inco/lightning/src/Lib.sol` — which hardcodes the **mainnet** Inco Lightning address — instead of `Lib.testnet.sol`, and `@inco/js` was pinned to `^0.7.12`, whose `Lightning.baseSepoliaTestnet()` resolved to an unrelated v2-preview executor. Pinning `@inco/js` to `1.0.0-testnet-1` (whose Base Sepolia deployment now matches `Lib.testnet.sol`'s hardcoded executor) and switching the contract's import to `Lib.testnet.sol` made both sides agree, and the deploy went through cleanly on the first real attempt.
-
-`FogPot` itself is blocked on a real environment issue, not a bug in this repo: Inco's two published npm packages are out of sync on Base Sepolia right now. `@inco/js`'s `Lightning.baseSepoliaTestnet()` binds to executor `0x168FDc3A...` (a v2 preview deployment), while every version of `@inco/lightning` up to `1.0.3-rc-7` hardcodes a different, older executor address for `Lib.testnet.sol` — one that doesn't appear anywhere in the JS SDK's own deployment registry. There's currently no matching pair of "Solidity library to import" + "SDK call to encrypt with" available. Deploying `FogPot` is unblocked as soon as Inco publishes a compatible pair (or confirms the right way to pin both sides to the same deployment).
+`FogPot` was previously blocked by what looked like an unfixable Inco package version-skew, but the real cause was two bugs on our side: `FogPot.sol` imported `@inco/lightning/src/Lib.sol` — which hardcodes the **mainnet** Inco Lightning address — instead of `Lib.testnet.sol`, and `@inco/js` was pinned to `^0.7.12`, whose `Lightning.baseSepoliaTestnet()` resolved to an unrelated v2-preview executor. Pinning `@inco/js` to `1.0.0-testnet-1` (whose Base Sepolia deployment now matches `Lib.testnet.sol`'s hardcoded executor) and switching the contract's import to `Lib.testnet.sol` made both sides agree.
 
 ## Getting started
 
@@ -140,7 +141,7 @@ npm run dev       # http://localhost:3000
 
 Routes:
 - `/` — landing page
-- `/raid` — the shared raid (connect a wallet, sign once, attack the boss)
+- `/raid` — the shared raid (connect a wallet, attack the deployed contract onchain)
 - `/fighter` — your fighter profile: rank, damage, crit rate, best hit (persisted per wallet)
 
 Build for production:
@@ -160,11 +161,15 @@ forge build
 `contracts/.env` needs `BASE_RPC_URL`, `DEPLOYER_ADDRESS`, and `DEPLOYER_PRIVATE_KEY` before deploying. Deploy with:
 
 ```bash
-tsx script/deploy.ts
+node --env-file=.env node_modules/.bin/tsx script/deploy.ts
 ```
 
-(`bun run script/deploy.ts` currently hits a module-resolution bug in one of Inco's transitive dependencies — use `tsx`/Node instead.)
+(Plain `tsx script/deploy.ts` won't load `.env` — Node's `--env-file` flag does that here, since the script reads `process.env` directly with no `dotenv` dependency. `bun run script/deploy.ts` currently hits a module-resolution bug in one of Inco's transitive dependencies — use `tsx`/Node instead.)
 
 ## Status
 
-Built during the Inco Summer Game Jam. `FogPot` is deployed and live on Base Sepolia (see [Deployed contract](#deployed-contract) above) with real encrypted boss state (`revealedHpPct() == 100`, `bossDefeated() == false`, confirmed by reading the contract directly). What's still simulated: the live `/raid` page attacks a shared boss held in the Next.js server's memory (see [Multiplayer](#multiplayer)), not the deployed contract — real damage rolls, a real shared fight, real signature-verified session keys, but not yet an onchain transaction. Wiring `/raid` to call `attack()` on the deployed contract directly (client-side Inco encryption of each guess, polling `settleThreshold`) is the next step now that the contract is live.
+Built during the Inco Summer Game Jam. `FogPot` is deployed and live on Base Sepolia (see [Deployed contract](#deployed-contract)), and `/raid` is wired directly to it — every attack is a real transaction (see [Attacking onchain](#attacking-onchain)), not a simulation. Trade-offs that came with going fully onchain, rather than open design choices:
+
+- **No more silent session-key attacks.** `attack()` moves real USDC and pays a real Inco fee from `msg.sender`, so every hit needs your wallet's own signature — the earlier "sign once, attack freely" session-key flow only works against the old simulated boss (`lib/sessionKey.ts`, `api/boss/*`), which `/raid` no longer uses.
+- **The damage leaderboard shows raiders, not a damage ranking.** Per-player damage is only ever decryptable by that player (`allow(msg.sender)`, never public) — genuinely, not just in the UI — so the contract has no way to expose a cross-player damage comparison. `/raid` lists who has attacked instead.
+- **No per-raider payout split yet.** Once the boss falls, `_defeatBoss()` buys real Megapot tickets into the contract's own balance, but distributing them to raiders by damage weighting needs a `claim()` function that isn't built yet.

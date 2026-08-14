@@ -1,54 +1,86 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import NavBar from "../components/NavBar";
 import BossSprite from "../components/BossSprite";
 import { useWallet } from "../components/WalletProvider";
-import { recordHit } from "../lib/fighterStats";
-import { playHit, playCrit, playDefeat } from "../lib/sound";
-import { useSessionKey } from "../lib/useSessionKey";
-import { signAttack } from "../lib/sessionKey";
-import type { BossState } from "../lib/bossState";
+import { playHit, playDefeat } from "../lib/sound";
+import { publicClient, getWalletClient } from "../lib/viemClients";
+import {
+  FOGPOT_ADDRESS,
+  USDC_ADDRESS,
+  ATTACK_FEE,
+  fogpotAbi,
+  usdcAbi,
+  incoLightningAbi,
+  INCO_LIGHTNING_ADDRESS,
+} from "../lib/fogpotContract";
+import { encryptGuess, revealThreshold, decryptOwnHandle } from "../lib/inco";
 
-type LeaderboardEntry = {
-  address: string;
-  damage: number;
+type BossState = {
+  hpPct: number;
+  defeated: boolean;
+  poolUsd: number;
+  attackers: string[];
 };
 
-const MAX_HP = 10000;
 const HP_SEGMENTS = 20;
-const POLL_MS = 1500;
+const POLL_MS = 4000;
+const APPROVAL_AMOUNT = ATTACK_FEE * BigInt(1000); // ~1000 attacks before re-approving
 
-const EMPTY_BOSS: BossState = {
-  hp: MAX_HP,
-  maxHp: MAX_HP,
-  poolUsd: 0,
-  defeated: false,
-  damageByAddress: {},
-};
+const EMPTY_BOSS: BossState = { hpPct: 100, defeated: false, poolUsd: 0, attackers: [] };
 
 export default function RaidPage() {
   const { address, connecting, hasProvider, connect } = useWallet();
-  const { session, starting, error: sessionError, startSession } = useSessionKey();
   const [boss, setBoss] = useState<BossState>(EMPTY_BOSS);
   const [attacking, setAttacking] = useState(false);
+  const [attackStep, setAttackStep] = useState<string | null>(null);
   const [shaking, setShaking] = useState(false);
-  const [lastCrit, setLastCrit] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
-  const [hitPopup, setHitPopup] = useState<{ key: number; value: number; crit: boolean } | null>(
-    null
-  );
-  // Poll the shared boss so every browser watching sees the same fight.
+  const [myDamage, setMyDamage] = useState<bigint | null>(null);
+  const [revealingDamage, setRevealingDamage] = useState(false);
+
+  const refreshBoss = useCallback(async () => {
+    try {
+      const [hpPct, defeated, pooledFees, attackers] = await Promise.all([
+        publicClient.readContract({
+          address: FOGPOT_ADDRESS,
+          abi: fogpotAbi,
+          functionName: "revealedHpPct",
+        }),
+        publicClient.readContract({
+          address: FOGPOT_ADDRESS,
+          abi: fogpotAbi,
+          functionName: "bossDefeated",
+        }),
+        publicClient.readContract({
+          address: FOGPOT_ADDRESS,
+          abi: fogpotAbi,
+          functionName: "pooledFees",
+        }),
+        publicClient.readContract({
+          address: FOGPOT_ADDRESS,
+          abi: fogpotAbi,
+          functionName: "getAttackers",
+        }),
+      ]);
+      setBoss({
+        hpPct: Number(hpPct),
+        defeated,
+        poolUsd: Number(pooledFees) / 1e6,
+        attackers: [...attackers],
+      });
+    } catch {
+      // next poll retries
+    }
+  }, []);
+
+  // Poll the real onchain boss so every browser watching sees the same fight.
   useEffect(() => {
     let cancelled = false;
     async function poll() {
-      try {
-        const res = await fetch("/api/boss", { cache: "no-store" });
-        const state: BossState = await res.json();
-        if (!cancelled) setBoss(state);
-      } catch {
-        // next poll retries
-      }
+      if (cancelled) return;
+      await refreshBoss();
     }
     poll();
     const id = setInterval(poll, POLL_MS);
@@ -56,7 +88,7 @@ export default function RaidPage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [refreshBoss]);
 
   async function attack() {
     if (!address) {
@@ -65,63 +97,116 @@ export default function RaidPage() {
     }
     setAttacking(true);
     setLastResult(null);
+    const player = address as `0x${string}`;
     try {
-      let activeSession = session;
-      if (!activeSession) {
-        activeSession = await startSession();
-        if (!activeSession) return; // owner declined the one-time authorization
+      const wallet = getWalletClient(player);
+
+      const allowance = await publicClient.readContract({
+        address: USDC_ADDRESS,
+        abi: usdcAbi,
+        functionName: "allowance",
+        args: [player, FOGPOT_ADDRESS],
+      });
+      if (allowance < ATTACK_FEE) {
+        setAttackStep("Approving USDC (one-time)...");
+        const approveHash = await wallet.writeContract({
+          address: USDC_ADDRESS,
+          abi: usdcAbi,
+          functionName: "approve",
+          args: [FOGPOT_ADDRESS, APPROVAL_AMOUNT],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
       }
 
-      const { signature, nonce } = await signAttack(activeSession);
-      const res = await fetch("/api/boss/attack", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          address,
-          sessionAddress: activeSession.sessionAddress,
-          expiresAt: activeSession.expiresAt,
-          authSignature: activeSession.authSignature,
-          attackSignature: signature,
-          nonce,
-        }),
-      });
-      const { hit, crit, state }: { hit: number; crit: boolean; state: BossState } =
-        await res.json();
+      setAttackStep("Encrypting your guess...");
+      const guess = Math.floor(Math.random() * 3);
+      const guessCiphertext = await encryptGuess(player, guess);
 
-      setBoss(state);
-      setLastCrit(crit);
+      const fee = await publicClient.readContract({
+        address: INCO_LIGHTNING_ADDRESS,
+        abi: incoLightningAbi,
+        functionName: "getFee",
+      });
+
+      setAttackStep("Sign the attack in your wallet...");
+      const attackHash = await wallet.writeContract({
+        address: FOGPOT_ADDRESS,
+        abi: fogpotAbi,
+        functionName: "attack",
+        args: [guessCiphertext],
+        value: fee,
+      });
+
+      setAttackStep("Waiting for confirmation...");
+      await publicClient.waitForTransactionReceipt({ hash: attackHash });
+
       setShaking(true);
       setTimeout(() => setShaking(false), 300);
-      setHitPopup({ key: Date.now(), value: hit, crit });
-      setLastResult(
-        crit
-          ? `CRITICAL HIT! Weak point found — ${hit} dmg`
-          : `You dealt ${hit} damage to the hidden boss.`
-      );
+      playHit();
+      setLastResult("Attack landed onchain. Damage is encrypted — reveal it below.");
+      setMyDamage(null); // stale until re-revealed
 
-      recordHit(address, hit, crit);
-
-      if (state.hp === 0) {
-        playDefeat();
-      } else if (crit) {
-        playCrit();
-      } else {
-        playHit();
+      const pending = await publicClient.readContract({
+        address: FOGPOT_ADDRESS,
+        abi: fogpotAbi,
+        functionName: "thresholdCheckPending",
+      });
+      if (pending) {
+        setAttackStep("Settling the boss's HP threshold onchain...");
+        const handle = await publicClient.readContract({
+          address: FOGPOT_ADDRESS,
+          abi: fogpotAbi,
+          functionName: "pendingThresholdCheckHandle",
+        });
+        const { crossed, sigs } = await revealThreshold(handle);
+        const settleHash = await wallet.writeContract({
+          address: FOGPOT_ADDRESS,
+          abi: fogpotAbi,
+          functionName: "settleThreshold",
+          args: [crossed, sigs],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: settleHash });
       }
+
+      const defeated = await publicClient.readContract({
+        address: FOGPOT_ADDRESS,
+        abi: fogpotAbi,
+        functionName: "bossDefeated",
+      });
+      if (defeated) playDefeat();
+
+      await refreshBoss();
+    } catch (err: any) {
+      setLastResult(err?.shortMessage || err?.message || "Attack failed.");
     } finally {
+      setAttackStep(null);
       setAttacking(false);
     }
   }
 
-  const leaderboard: LeaderboardEntry[] = Object.entries(boss.damageByAddress)
-    .map(([addr, damage]) => ({ address: addr, damage }))
-    .sort((a, b) => b.damage - a.damage);
+  async function revealMyDamage() {
+    if (!address) return;
+    setRevealingDamage(true);
+    try {
+      const player = address as `0x${string}`;
+      const handle = await publicClient.readContract({
+        address: FOGPOT_ADDRESS,
+        abi: fogpotAbi,
+        functionName: "damageHandleOf",
+        args: [player],
+      });
+      const wallet = getWalletClient(player);
+      const dmg = await decryptOwnHandle(wallet, handle);
+      setMyDamage(dmg);
+    } catch (err: any) {
+      setLastResult(err?.shortMessage || err?.message || "Could not reveal damage.");
+    } finally {
+      setRevealingDamage(false);
+    }
+  }
 
-  const myDamage = address ? boss.damageByAddress[address] ?? 0 : 0;
-  const totalDamage = leaderboard.reduce((sum, e) => sum + e.damage, 0) || 1;
-
-  const hpPct = Math.round((boss.hp / boss.maxHp) * 100);
-  const filledSegments = Math.round((boss.hp / boss.maxHp) * HP_SEGMENTS);
+  const hpPct = boss.hpPct;
+  const filledSegments = Math.round((hpPct / 100) * HP_SEGMENTS);
   const hpState = hpPct > 50 ? "" : hpPct > 20 ? "mid" : "low";
 
   return (
@@ -132,14 +217,7 @@ export default function RaidPage() {
         <div className="boss-name">CONFIDENTIAL RAID BOSS</div>
         <div className="boss-title">THE DARK POOL</div>
 
-        <BossSprite shaking={shaking} crit={lastCrit} float={!shaking}>
-          {hitPopup && (
-            <div key={hitPopup.key} className={`dmg-popup${hitPopup.crit ? " crit" : ""}`}>
-              {hitPopup.crit ? "CRIT! " : "+"}
-              {hitPopup.value}
-            </div>
-          )}
-        </BossSprite>
+        <BossSprite shaking={shaking} crit={false} float={!shaking} />
 
         <div className="hp-bar-track">
           {Array.from({ length: HP_SEGMENTS }).map((_, i) => (
@@ -150,21 +228,22 @@ export default function RaidPage() {
           ))}
         </div>
         <div className="hp-label">
-          <span>{boss.hp.toLocaleString()} / {boss.maxHp.toLocaleString()} HP</span>
-          <span>{hpPct}%</span>
+          <span>{hpPct}% HP (coarse — exact HP stays encrypted)</span>
+          <span>{boss.defeated ? "DEFEATED" : "ALIVE"}</span>
         </div>
 
         <div className="fog-note">
-          This boss is shared — every browser hitting ATTACK is fighting the
-          same fight in real time. Boss HP + weak points are encrypted
-          onchain via Inco Lightning; damage is revealed, the weak point
-          isn&apos;t, until HP crosses a threshold.
+          This is the real, deployed FogPot contract on Base Sepolia — every attack
+          below is a real onchain transaction. Boss HP + weak points are encrypted via
+          Inco Lightning; only coarse thresholds (75/50/25/0%) ever become public.
         </div>
 
         <div className="grid-2" style={{ marginTop: 20 }}>
           <div>
             <div className="stat-label">YOUR DAMAGE</div>
-            <div className="stat-value">{myDamage.toLocaleString()}</div>
+            <div className="stat-value">
+              {myDamage !== null ? myDamage.toLocaleString() : "hidden"}
+            </div>
           </div>
           <div>
             <div className="stat-label">POOL → TICKETS</div>
@@ -172,17 +251,30 @@ export default function RaidPage() {
           </div>
         </div>
 
-        <button className="attack-btn" onClick={attack} disabled={attacking || boss.defeated}>
+        {address && (
+          <button
+            type="button"
+            className="attack-btn"
+            style={{ marginTop: 10 }}
+            onClick={revealMyDamage}
+            disabled={revealingDamage}
+          >
+            {revealingDamage ? "REVEALING..." : "REVEAL MY DAMAGE (sign, no gas)"}
+          </button>
+        )}
+
+        <button
+          className="attack-btn"
+          style={{ marginTop: 10 }}
+          onClick={attack}
+          disabled={attacking || boss.defeated}
+        >
           {boss.defeated
-            ? "BOSS DEFEATED — TICKETS SENT"
+            ? "BOSS DEFEATED"
             : attacking
-            ? starting
-              ? "AWAITING SIGNATURE..."
-              : "ATTACKING..."
+            ? attackStep ?? "ATTACKING..."
             : address
-            ? session
-              ? "ATTACK (0.01 USDC)"
-              : "SIGN & ATTACK (0.01 USDC)"
+            ? "ATTACK (0.01 USDC + gas)"
             : connecting
             ? "CONNECTING..."
             : hasProvider
@@ -197,76 +289,42 @@ export default function RaidPage() {
           </div>
         )}
 
-        {address && session && (
-          <div className="hp-label" style={{ marginTop: 6 }}>
-            <span>SESSION</span>
-            <span>
-              {session.sessionAddress.slice(0, 6)}...{session.sessionAddress.slice(-4)} — no
-              more popups this hour
-            </span>
-          </div>
-        )}
-
-        {sessionError && <div className="fog-note">{sessionError}</div>}
         {lastResult && <div className="fog-note">{lastResult}</div>}
       </div>
 
       <div className="panel">
         <div className="section-title">
-          <span className="badge">DAMAGE LEADERBOARD</span>
+          <span className="badge">RAIDERS</span>
         </div>
-        {leaderboard.length === 0 && (
+        <div className="fog-note">
+          Damage dealt is encrypted per-player — only you can ever decrypt your own
+          total, so this list shows who has attacked, not a damage ranking.
+        </div>
+        {boss.attackers.length === 0 && (
           <div className="fog-note">No attacks landed yet — connect and swing first.</div>
         )}
-        {leaderboard.map((entry, i) => (
-          <div className="leaderboard-row" key={entry.address}>
+        {boss.attackers.map((addr, i) => (
+          <div className="leaderboard-row" key={addr}>
             <span>
               <span className="leaderboard-rank">#{i + 1}</span>
               <span className="leaderboard-addr">
-                {entry.address.slice(0, 6)}...{entry.address.slice(-4)}
+                {addr.slice(0, 6)}...{addr.slice(-4)}
               </span>
             </span>
-            <span className="leaderboard-dmg">{entry.damage.toLocaleString()} dmg</span>
           </div>
         ))}
       </div>
 
-      {boss.defeated && leaderboard.length > 0 && (
+      {boss.defeated && (
         <div className="panel swatch-yellow">
           <div className="section-title">
-            <span className="badge">BOSS DEFEATED — PAYOUT PREVIEW</span>
+            <span className="badge">BOSS DEFEATED</span>
           </div>
           <div className="fog-note">
-            ${boss.poolUsd.toFixed(2)} pooled from every attack fee batch-buys real Megapot
-            tickets onchain, split across raiders by damage dealt. This is a preview of that
-            split — not a real payout yet.
+            ${boss.poolUsd.toFixed(2)} pooled from every attack fee batch-bought real
+            Megapot tickets onchain. Per-raider ticket distribution by damage weighting
+            is a follow-up <code>claim()</code> once tickets are minted — see the README.
           </div>
-          <div className="fog-note">
-            <a
-              href="https://sepolia.basescan.org/address/0xb143a7a988cb170bd9fdfc5b0418052068a33106"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              View the deployed batch-purchase contract on Base Sepolia ↗
-            </a>
-          </div>
-          {leaderboard.map((entry, i) => {
-            const pct = (entry.damage / totalDamage) * 100;
-            const payout = (boss.poolUsd * pct) / 100;
-            return (
-              <div className="leaderboard-row" key={entry.address}>
-                <span>
-                  <span className="leaderboard-rank">#{i + 1}</span>
-                  <span className="leaderboard-addr">
-                    {entry.address.slice(0, 6)}...{entry.address.slice(-4)}
-                  </span>
-                </span>
-                <span className="leaderboard-dmg">
-                  {pct.toFixed(1)}% · ${payout.toFixed(3)}
-                </span>
-              </div>
-            );
-          })}
         </div>
       )}
 
