@@ -66,11 +66,18 @@ Hit, crit, and boss-defeat effects are synthesized in-browser with the Web Audio
 
 Megapot only publishes **mainnet** (Base, chain 8453) addresses — there's no real Base Sepolia `BatchPurchaseFacilitator` to point at for testing. [`MockBatchPurchaseFacilitator.sol`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) is a testnet-only stand-in with the same interface that emits an event instead of buying real tickets; swap in the real mainnet address before going live.
 
-See [`docs/inco-confidentialdeck-kit.md`](docs/inco-confidentialdeck-kit.md) for the underlying Inco primitives and [`docs/megapot-protocol-reference.md`](docs/megapot-protocol-reference.md) for Megapot's contract addresses and purchase call signatures.
+See [`frontend/docs/inco-confidentialdeck-kit.md`](frontend/docs/inco-confidentialdeck-kit.md) for the underlying Inco primitives and [`frontend/docs/megapot-protocol-reference.md`](frontend/docs/megapot-protocol-reference.md) for Megapot's contract addresses and purchase call signatures.
 
 ## Deployed contract
 
-Not yet deployed — the deploy script ([`contracts/script/deploy.ts`](contracts/script/deploy.ts)) is ready and its Inco encryption step has been verified end-to-end against Base Sepolia, but the deployer wallet has no Base Sepolia ETH yet. This section will be filled in with the live address and a BaseScan link once that's funded and the deploy runs.
+**Base Sepolia**
+
+| Contract | Address |
+|---|---|
+| [`MockBatchPurchaseFacilitator`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) | [`0xb143a7a988cb170bd9fdfc5b0418052068a33106`](https://sepolia.basescan.org/address/0xb143a7a988cb170bd9fdfc5b0418052068a33106) |
+| `FogPot` | not yet deployed |
+
+`FogPot` itself is blocked on a real environment issue, not a bug in this repo: Inco's two published npm packages are out of sync on Base Sepolia right now. `@inco/js`'s `Lightning.baseSepoliaTestnet()` binds to executor `0x168FDc3A...` (a v2 preview deployment), while every version of `@inco/lightning` up to `1.0.3-rc-7` hardcodes a different, older executor address for `Lib.testnet.sol` — one that doesn't appear anywhere in the JS SDK's own deployment registry. There's currently no matching pair of "Solidity library to import" + "SDK call to encrypt with" available. Deploying `FogPot` is unblocked as soon as Inco publishes a compatible pair (or confirms the right way to pin both sides to the same deployment).
 
 ## Getting started
 
