@@ -4,7 +4,7 @@ import { toHex } from "viem";
 import { FOGPOT_ADDRESS } from "./fogpotContract";
 import type { getWalletClient } from "./viemClients";
 
-type ConnectedWalletClient = ReturnType<typeof getWalletClient>;
+type ConnectedWalletClient = Awaited<ReturnType<typeof getWalletClient>>;
 
 let lightningPromise: ReturnType<typeof Lightning.baseSepoliaTestnet> | null = null;
 

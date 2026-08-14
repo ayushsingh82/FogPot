@@ -15,7 +15,7 @@ import {
   incoLightningAbi,
   INCO_LIGHTNING_ADDRESS,
 } from "../lib/fogpotContract";
-import { encryptGuess, revealThreshold, decryptOwnHandle } from "../lib/inco";
+import { encryptGuess, decryptOwnHandle } from "../lib/inco";
 
 type BossState = {
   hpPct: number;
@@ -99,7 +99,7 @@ export default function RaidPage() {
     setLastResult(null);
     const player = address as `0x${string}`;
     try {
-      const wallet = getWalletClient(player);
+      const wallet = await getWalletClient(player);
 
       const allowance = await publicClient.readContract({
         address: USDC_ADDRESS,
@@ -146,36 +146,18 @@ export default function RaidPage() {
       setLastResult("Attack landed onchain. Damage is encrypted — reveal it below.");
       setMyDamage(null); // stale until re-revealed
 
-      const pending = await publicClient.readContract({
-        address: FOGPOT_ADDRESS,
-        abi: fogpotAbi,
-        functionName: "thresholdCheckPending",
-      });
-      if (pending) {
-        setAttackStep("Settling the boss's HP threshold onchain...");
-        const handle = await publicClient.readContract({
-          address: FOGPOT_ADDRESS,
-          abi: fogpotAbi,
-          functionName: "pendingThresholdCheckHandle",
-        });
-        const { crossed, sigs } = await revealThreshold(handle);
-        const settleHash = await wallet.writeContract({
-          address: FOGPOT_ADDRESS,
-          abi: fogpotAbi,
-          functionName: "settleThreshold",
-          args: [crossed, sigs],
-        });
-        await publicClient.waitForTransactionReceipt({ hash: settleHash });
-      }
+      // A relayer settles the HP threshold server-side — no second signature needed.
+      fetch("/api/settle", { method: "POST" })
+        .then(() => refreshBoss())
+        .catch(() => {});
 
+      await refreshBoss();
       const defeated = await publicClient.readContract({
         address: FOGPOT_ADDRESS,
         abi: fogpotAbi,
         functionName: "bossDefeated",
       });
       if (defeated) playDefeat();
-
-      await refreshBoss();
     } catch (err: any) {
       setLastResult(err?.shortMessage || err?.message || "Attack failed.");
     } finally {
@@ -195,7 +177,7 @@ export default function RaidPage() {
         functionName: "damageHandleOf",
         args: [player],
       });
-      const wallet = getWalletClient(player);
+      const wallet = await getWalletClient(player);
       const dmg = await decryptOwnHandle(wallet, handle);
       setMyDamage(dmg);
     } catch (err: any) {
