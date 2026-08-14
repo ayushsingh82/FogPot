@@ -10,40 +10,67 @@ It's a raid boss, a slot machine, and a lottery pool, wired together through con
 
 ## How it works
 
-1. **Attack blind.** Pay 0.5 USDC and draw a hidden card from the boss's encrypted deck. You never see the weak point — only the damage you dealt.
-2. **The fog lifts gradually.** Boss HP and its weak point stay encrypted onchain via [Inco Lightning](https://docs.inco.org). Hints unlock only as HP crosses 75%, 50%, and 25%.
-3. **The pool pays out.** When the boss falls, every USDC paid in gets batch-converted into real Megapot tickets via `BatchPurchaseFacilitator`, split by damage contribution and sent straight to raiders.
+1. **Sign in once, attack freely.** Connect a wallet and authorize a throwaway session key with a single signature. Every attack after that is signed by the session key locally — no MetaMask popup per hit.
+2. **Attack blind.** Pay 0.01 USDC and submit an encrypted guess at the boss's hidden weak point. Guess right for a critical hit, guess wrong for normal damage — only you can ever decrypt which one you got.
+3. **The fog lifts in bits, not numbers.** Boss HP and its weak point stay encrypted onchain via [Inco Lightning](https://docs.inco.org). The public only ever learns single-bit milestones — HP crossed 75% / 50% / 25% / defeated — never the exact HP or the damage that caused it.
+4. **The pool pays out.** When the boss falls, every USDC paid in gets batch-converted into real Megapot tickets via `BatchPurchaseFacilitator`, split by damage contribution.
 
 No mocked reward, no simulated payout, no link-out — boss defeat triggers a live ticket purchase on Base.
 
 ## Why it's confidential
 
-Most onchain "hidden information" games fake it — the state is public, only the UI hides it. FogPot's boss HP and weak point are genuinely encrypted contract state:
+Most onchain "hidden information" games fake it — the state is public, only the UI hides it. FogPot's boss HP, weak point, and per-player damage are genuinely encrypted contract state:
 
-- **Encrypted HP & weak point** — stored as `euint256` via Inco Lightning. Nothing about them is readable onchain or off until the game forces a reveal.
-- **Fair, unpredictable draws** — damage cards come from an encrypted shuffle. There's no `blockhash` to front-run and no way to predict the next draw before paying for it.
+- **Encrypted HP & weak point** — stored as `euint256`/`ebool` via Inco Lightning. Attacks compare an encrypted guess against the encrypted weak point (`e.eq`) and compute crit-vs-normal damage (`e.select`) without ever decrypting either.
+- **Private per-player damage** — each raider's cumulative damage is a private `euint256` that only that raider is ever granted access to decrypt (`allow(msg.sender)`). Nobody else — not other raiders, not the deployer — can see who's dealing how much.
+- **One-bit threshold reveals** — going public with "HP crossed 25%" is a genuinely async operation: the contract requests a decryption of a single boolean (`e.reveal`), and a covalidator-signed attestation later settles it (`settleThreshold` + `e.verifyDecryption`). Nothing about exact HP or exact damage is ever exposed.
 - **One shared pool** — every attack fee across every raider joins a single USDC pool. You're not grinding solo; the whole raid party wins together when the boss falls.
+
+## Multiplayer
+
+FogPot is one shared boss, not per-player instances — everyone who opens `/raid` is fighting the same fight. The frontend polls a shared boss state every 1.5s, so two browsers (or two thousand) watch the same HP bar drop in real time and show up on the same damage leaderboard. This shared state currently lives in the Next.js server (see [Status](#status) below on what that means for production).
+
+## Session keys
+
+Signing every single attack with your main wallet would mean a MetaMask popup per hit — real friction for a game meant to be played fast. Instead:
+
+1. Your wallet signs **one** off-chain message authorizing a locally-generated burner key for the next hour.
+2. That burner key signs every subsequent attack itself, entirely client-side — no further popups.
+3. The server verifies both signatures on every attack: that your wallet really authorized this burner key (`recoverMessageAddress` against the authorization message), and that this specific attack was really signed by that key — plus a nonce check to reject replayed signatures.
+
+This is a lightweight alternative to full ERC-4337 account abstraction: no bundler, no paymaster, no smart-contract wallet — just a locally-held keypair and two verified signatures. See [`lib/sessionKey.ts`](frontend/app/lib/sessionKey.ts) and [`api/boss/attack/route.ts`](frontend/app/api/boss/attack/route.ts).
+
+## Sound
+
+Hit, crit, and boss-defeat effects are synthesized in-browser with the Web Audio API (a pitch sweep + filtered noise burst for the "swing and thwack" of a hit, a bigger version plus a stinger for crits, a four-note fanfare for defeat) — no external audio files. Mute state persists in `localStorage`; toggle it from the speaker icon in the navbar.
 
 ## Tech stack
 
 | Layer | Tech |
 |---|---|
-| Confidential compute | [Inco Lightning](https://docs.inco.org) — encrypted onchain state (`euint256`), encrypted shuffles, attested reveals |
+| Confidential compute | [Inco Lightning](https://docs.inco.org) — encrypted onchain state (`euint256`/`ebool`), async attested reveals |
 | Jackpot payout | [Megapot](https://megapot.io) — real USDC → jackpot tickets via `BatchPurchaseFacilitator` |
-| Settlement | [Base](https://base.org) — fast, cheap L2 settlement |
-| Contracts | Solidity ^0.8.24, [Foundry](https://book.getfoundry.sh) |
+| Settlement | [Base](https://base.org) / [Base Sepolia](https://docs.base.org/tools/network-faucets) — fast, cheap L2 settlement |
+| Contracts | Solidity ^0.8.29, [Foundry](https://book.getfoundry.sh) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, [viem](https://viem.sh) |
+| Deploy tooling | [`@inco/js`](https://docs.inco.org) for off-chain ciphertext generation, `tsx` |
 
 ## The contract
 
 [`FogPot.sol`](contracts/src/FogPot.sol) holds:
 
-- `bossHp` and `weakPoint` as encrypted `euint256` state, set once at deploy from a ciphertext.
-- `attack(bytes guessCiphertext)` — takes the 0.5 USDC fee, compares an encrypted guess against the encrypted weak point (`e.eq`), and only ever reveals whether *this specific attack* was a crit — never the weak point itself.
-- Threshold reveals at 75% / 50% / 25% HP, so the fog lifts in stages as the raid progresses.
-- `_defeatBoss()` — once HP hits zero, pooled fees are approved and routed into `BatchPurchaseFacilitator.createBatchOrder(...)`, buying real Megapot tickets for the contract. (Per-attacker ticket distribution by `damageDealt` weighting is a follow-up `claim()` once tickets are minted.)
+- `bossHp` and `weakPoint` as encrypted `euint256` state, set once at deploy from ciphertexts generated off-chain.
+- `attack(bytes guessCiphertext)` — takes the 0.01 USDC fee, compares an encrypted guess against the encrypted weak point (`e.eq`), and updates HP and each player's private damage total homomorphically. Nothing about the outcome is ever made public.
+- `settleThreshold(bool crossed, bytes[] sigs)` — applies a covalidator-signed attestation to advance the public HP bucket (75% → 50% → 25% → defeated), one bit at a time.
+- `_defeatBoss()` — once HP hits zero, pooled fees are approved and routed into `BatchPurchaseFacilitator.createBatchOrder(...)`, buying real Megapot tickets for the contract. (Per-attacker ticket distribution by damage weighting is a follow-up `claim()` once tickets are minted.)
 
-See [`docs/inco-confidentialdeck-kit.md`](docs/inco-confidentialdeck-kit.md) for the underlying Inco primitives (shuffle, draw, deal, reveal, verify) and [`docs/megapot-protocol-reference.md`](docs/megapot-protocol-reference.md) for Megapot's contract addresses and purchase call signatures on Base.
+Megapot only publishes **mainnet** (Base, chain 8453) addresses — there's no real Base Sepolia `BatchPurchaseFacilitator` to point at for testing. [`MockBatchPurchaseFacilitator.sol`](contracts/src/mocks/MockBatchPurchaseFacilitator.sol) is a testnet-only stand-in with the same interface that emits an event instead of buying real tickets; swap in the real mainnet address before going live.
+
+See [`docs/inco-confidentialdeck-kit.md`](docs/inco-confidentialdeck-kit.md) for the underlying Inco primitives and [`docs/megapot-protocol-reference.md`](docs/megapot-protocol-reference.md) for Megapot's contract addresses and purchase call signatures.
+
+## Deployed contract
+
+Not yet deployed — the deploy script ([`contracts/script/deploy.ts`](contracts/script/deploy.ts)) is ready and its Inco encryption step has been verified end-to-end against Base Sepolia, but the deployer wallet has no Base Sepolia ETH yet. This section will be filled in with the live address and a BaseScan link once that's funded and the deploy runs.
 
 ## Getting started
 
@@ -57,7 +84,7 @@ npm run dev       # http://localhost:3000
 
 Routes:
 - `/` — landing page
-- `/raid` — the raid itself (connect a wallet, attack the boss)
+- `/raid` — the shared raid (connect a wallet, sign once, attack the boss)
 - `/fighter` — your fighter profile: rank, damage, crit rate, best hit (persisted per wallet)
 
 Build for production:
@@ -74,8 +101,14 @@ cd contracts
 forge build
 ```
 
-Set `BASE_RPC_URL` in your environment before deploying or running scripts against Base.
+`contracts/.env` needs `BASE_RPC_URL`, `DEPLOYER_ADDRESS`, and `DEPLOYER_PRIVATE_KEY` before deploying. Deploy with:
+
+```bash
+tsx script/deploy.ts
+```
+
+(`bun run script/deploy.ts` currently hits a module-resolution bug in one of Inco's transitive dependencies — use `tsx`/Node instead.)
 
 ## Status
 
-Built during the Inco Summer Game Jam. The frontend raid loop currently runs on mocked attack outcomes for rapid iteration on the game feel; `FogPot.sol` is the target onchain implementation once wired end-to-end with an Inco-encrypted deployment and a live Megapot integration on Base.
+Built during the Inco Summer Game Jam. Two things are genuinely real right now: `FogPot.sol` compiles clean against the real Inco Lightning + OpenZeppelin dependencies, and the `@inco/js` encryption pipeline for its constructor args has been verified against Base Sepolia. What's still simulated: the live `/raid` page attacks a shared boss held in the Next.js server's memory (see [Multiplayer](#multiplayer)), not the deployed contract — real damage rolls, a real shared fight, real signature-verified session keys, but not yet an onchain transaction. Wiring `/raid` to call `attack()` on the deployed contract directly (client-side Inco encryption of each guess, polling `settleThreshold`) is the next step once the contract is live.
