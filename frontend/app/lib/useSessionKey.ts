@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useWallet } from "../components/WalletProvider";
-import { clearSession, createSession, loadSession, type Session } from "./sessionKey";
+import { advanceSessionNonce, clearSession, createSession, loadSession, type Session } from "./sessionKey";
 
 export function useSessionKey() {
-  const { address, signMessage } = useWallet();
+  const { address, signTypedData } = useWallet();
   const [session, setSession] = useState<Session | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +19,7 @@ export function useSessionKey() {
     setStarting(true);
     setError(null);
     try {
-      const s = await createSession(address, signMessage);
+      const s = await createSession(address as `0x${string}`, signTypedData);
       setSession(s);
       return s;
     } catch {
@@ -28,12 +28,16 @@ export function useSessionKey() {
     } finally {
       setStarting(false);
     }
-  }, [address, signMessage]);
+  }, [address, signTypedData]);
 
   const endSession = useCallback(() => {
     clearSession();
     setSession(null);
   }, []);
 
-  return { session, starting, error, startSession, endSession };
+  const bumpNonce = useCallback(() => {
+    setSession((prev) => (prev ? advanceSessionNonce(prev) : prev));
+  }, []);
+
+  return { session, starting, error, startSession, endSession, bumpNonce };
 }

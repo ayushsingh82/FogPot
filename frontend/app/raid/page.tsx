@@ -12,26 +12,34 @@ import {
   ATTACK_FEE,
   fogpotAbi,
   usdcAbi,
-  incoLightningAbi,
-  INCO_LIGHTNING_ADDRESS,
 } from "../lib/fogpotContract";
 import { encryptGuess, decryptOwnHandle } from "../lib/inco";
+import { useSessionKey } from "../lib/useSessionKey";
+import { signAttack } from "../lib/sessionKey";
 
 type BossState = {
   hpPct: number;
   defeated: boolean;
   poolUsd: number;
   attackers: string[];
+  thresholdCheckPending: boolean;
 };
 
 const HP_SEGMENTS = 20;
 const POLL_MS = 4000;
 const APPROVAL_AMOUNT = ATTACK_FEE * BigInt(1000); // ~1000 attacks before re-approving
 
-const EMPTY_BOSS: BossState = { hpPct: 100, defeated: false, poolUsd: 0, attackers: [] };
+const EMPTY_BOSS: BossState = {
+  hpPct: 100,
+  defeated: false,
+  poolUsd: 0,
+  attackers: [],
+  thresholdCheckPending: false,
+};
 
 export default function RaidPage() {
   const { address, connecting, hasProvider, connect } = useWallet();
+  const { session, starting: startingSession, startSession, endSession, bumpNonce } = useSessionKey();
   const [boss, setBoss] = useState<BossState>(EMPTY_BOSS);
   const [attacking, setAttacking] = useState(false);
   const [attackStep, setAttackStep] = useState<string | null>(null);
@@ -42,7 +50,7 @@ export default function RaidPage() {
 
   const refreshBoss = useCallback(async () => {
     try {
-      const [hpPct, defeated, pooledFees, attackers] = await Promise.all([
+      const [hpPct, defeated, pooledFees, attackers, thresholdCheckPending] = await Promise.all([
         publicClient.readContract({
           address: FOGPOT_ADDRESS,
           abi: fogpotAbi,
@@ -63,13 +71,25 @@ export default function RaidPage() {
           abi: fogpotAbi,
           functionName: "getAttackers",
         }),
+        publicClient.readContract({
+          address: FOGPOT_ADDRESS,
+          abi: fogpotAbi,
+          functionName: "thresholdCheckPending",
+        }),
       ]);
       setBoss({
         hpPct: Number(hpPct),
         defeated,
         poolUsd: Number(pooledFees) / 1e6,
         attackers: [...attackers],
+        thresholdCheckPending,
       });
+      // A threshold reveal is stuck until someone relays a fresh attestation —
+      // retry on every poll tick so HP catches up on its own once Inco's
+      // decryption oracle network is reachable again, no user action needed.
+      if (thresholdCheckPending) {
+        fetch("/api/settle", { method: "POST" }).catch(() => {});
+      }
     } catch {
       // next poll retries
     }
@@ -90,6 +110,11 @@ export default function RaidPage() {
     };
   }, [refreshBoss]);
 
+  // Two wallet signatures ever, not one per attack: a one-time USDC approval and a
+  // one-time (per hour) session authorization. Every attack after that is signed
+  // locally by a burner session key and relayed onchain by the server — the spend
+  // still comes out of your own wallet's USDC balance via that approval, you just
+  // see it land in your tx history instead of clicking "confirm" each time.
   async function attack() {
     if (!address) {
       connect();
@@ -118,27 +143,36 @@ export default function RaidPage() {
         await publicClient.waitForTransactionReceipt({ hash: approveHash });
       }
 
+      let activeSession = session;
+      if (!activeSession) {
+        setAttackStep("Authorize a raid session (sign once)...");
+        activeSession = await startSession();
+        if (!activeSession) throw new Error("Session authorization rejected.");
+      }
+
       setAttackStep("Encrypting your guess...");
       const guess = Math.floor(Math.random() * 3);
       const guessCiphertext = await encryptGuess(player, guess);
 
-      const fee = await publicClient.readContract({
-        address: INCO_LIGHTNING_ADDRESS,
-        abi: incoLightningAbi,
-        functionName: "getFee",
-      });
+      setAttackStep("Relaying attack — no signature needed...");
+      const { signature: attackSignature, nonce } = await signAttack(activeSession);
 
-      setAttackStep("Sign the attack in your wallet...");
-      const attackHash = await wallet.writeContract({
-        address: FOGPOT_ADDRESS,
-        abi: fogpotAbi,
-        functionName: "attack",
-        args: [guessCiphertext],
-        value: fee,
+      const res = await fetch("/api/boss/attack", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          player,
+          guessCiphertext,
+          sessionKey: activeSession.sessionAddress,
+          expiresAtSec: activeSession.expiresAtSec,
+          authSignature: activeSession.authSignature,
+          nonce,
+          attackSignature,
+        }),
       });
-
-      setAttackStep("Waiting for confirmation...");
-      await publicClient.waitForTransactionReceipt({ hash: attackHash });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Attack relay failed.");
+      bumpNonce();
 
       setShaking(true);
       setTimeout(() => setShaking(false), 300);
@@ -159,7 +193,13 @@ export default function RaidPage() {
       });
       if (defeated) playDefeat();
     } catch (err: any) {
-      setLastResult(err?.shortMessage || err?.message || "Attack failed.");
+      const message = err?.shortMessage || err?.message || "Attack failed.";
+      setLastResult(message);
+      // A stale/rejected session (expired, bad nonce, revoked) should not keep
+      // failing silently — drop it so the next attack starts a fresh one.
+      if (/nonce|session|signature/i.test(message)) {
+        endSession();
+      }
     } finally {
       setAttackStep(null);
       setAttacking(false);
@@ -220,6 +260,15 @@ export default function RaidPage() {
           Inco Lightning; only coarse thresholds (75/50/25/0%) ever become public.
         </div>
 
+        {boss.thresholdCheckPending && !boss.defeated && (
+          <div className="fog-note">
+            HP milestone reveal pending — waiting on Inco&apos;s decryption oracle
+            network to attest the next threshold. Retrying automatically; this can
+            take a moment (or catch up once Inco&apos;s testnet oracles are back if
+            they&apos;re temporarily down).
+          </div>
+        )}
+
         <div className="grid-2" style={{ marginTop: 20 }}>
           <div>
             <div className="stat-label">YOUR DAMAGE</div>
@@ -249,14 +298,16 @@ export default function RaidPage() {
           className="attack-btn"
           style={{ marginTop: 10 }}
           onClick={attack}
-          disabled={attacking || boss.defeated}
+          disabled={attacking || boss.defeated || startingSession}
         >
           {boss.defeated
             ? "BOSS DEFEATED"
             : attacking
             ? attackStep ?? "ATTACKING..."
             : address
-            ? "ATTACK (0.01 USDC + gas)"
+            ? session
+              ? "ATTACK (no signature needed)"
+              : "ATTACK (0.01 USDC + start session)"
             : connecting
             ? "CONNECTING..."
             : hasProvider
@@ -268,6 +319,26 @@ export default function RaidPage() {
           <div className="hp-label" style={{ marginTop: 10 }}>
             <span>CONNECTED</span>
             <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
+          </div>
+        )}
+
+        {address && session && (
+          <div className="hp-label" style={{ marginTop: 4 }}>
+            <span>
+              SESSION ACTIVE — expires{" "}
+              {new Date(session.expiresAt).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+            <button
+              type="button"
+              className="nav-rules-btn"
+              onClick={endSession}
+              style={{ padding: "2px 8px" }}
+            >
+              END SESSION
+            </button>
           </div>
         )}
 

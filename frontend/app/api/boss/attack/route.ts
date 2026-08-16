@@ -1,52 +1,77 @@
 import { NextResponse } from "next/server";
-import { recoverMessageAddress } from "viem";
-import { applyAttack, claimNonce } from "../../../lib/bossState";
-import { authMessage, attackMessage } from "../../../lib/sessionKey";
+import { createPublicClient, createWalletClient, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { baseSepolia } from "viem/chains";
+import {
+  FOGPOT_ADDRESS,
+  fogpotAbi,
+  incoLightningAbi,
+  INCO_LIGHTNING_ADDRESS,
+} from "../../../lib/fogpotContract";
 
-const SESSION_TTL_MS = 60 * 60 * 1000;
+const RPC_URL = "https://sepolia.base.org";
 
+// Relays a session-key-signed attack onchain via FogPot.attackFor(), so a player
+// only ever signs one wallet popup (the SessionAuth authorization) — every attack
+// after that is this route submitting a fresh burner-key-signed call. USDC still
+// moves out of the player's own balance via their pre-existing allowance to FogPot;
+// this relayer never custodies funds, it only fronts gas + the Inco protocol fee,
+// same sponsorship model as /api/settle.
 export async function POST(req: Request) {
+  const relayerKey = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
+  if (!relayerKey) {
+    return NextResponse.json({ error: "relayer not configured" }, { status: 500 });
+  }
+
   const body = await req.json().catch(() => null);
-  const { address, sessionAddress, expiresAt, authSignature, attackSignature, nonce } =
+  const { player, guessCiphertext, sessionKey, expiresAtSec, authSignature, nonce, attackSignature } =
     body ?? {};
-
-  if (!address || typeof address !== "string") {
-    return NextResponse.json({ error: "address required" }, { status: 400 });
+  if (
+    !player ||
+    !guessCiphertext ||
+    !sessionKey ||
+    expiresAtSec === undefined ||
+    !authSignature ||
+    nonce === undefined ||
+    !attackSignature
+  ) {
+    return NextResponse.json({ error: "incomplete attack request" }, { status: 400 });
   }
 
-  // Session-signed attack: verify the burner key was really authorized by
-  // `address`, and that this specific attack was really signed by that key.
-  if (sessionAddress || attackSignature) {
-    if (!sessionAddress || !expiresAt || !authSignature || !attackSignature || !nonce) {
-      return NextResponse.json({ error: "incomplete session attack" }, { status: 400 });
-    }
-    if (expiresAt < Date.now()) {
-      return NextResponse.json({ error: "session expired" }, { status: 401 });
-    }
-    if (expiresAt - Date.now() > SESSION_TTL_MS + 60_000) {
-      return NextResponse.json({ error: "invalid session expiry" }, { status: 401 });
-    }
-    if (!claimNonce(nonce)) {
-      return NextResponse.json({ error: "nonce already used" }, { status: 401 });
-    }
+  const publicClient = createPublicClient({ chain: baseSepolia, transport: http(RPC_URL) });
+  const account = privateKeyToAccount(relayerKey);
+  const walletClient = createWalletClient({ account, chain: baseSepolia, transport: http(RPC_URL) });
 
-    const authRecovered = await recoverMessageAddress({
-      message: authMessage(sessionAddress, address, expiresAt),
-      signature: authSignature,
-    }).catch(() => null);
-    if (!authRecovered || authRecovered.toLowerCase() !== address.toLowerCase()) {
-      return NextResponse.json({ error: "bad session authorization" }, { status: 401 });
-    }
+  try {
+    const fee = await publicClient.readContract({
+      address: INCO_LIGHTNING_ADDRESS,
+      abi: incoLightningAbi,
+      functionName: "getFee",
+    });
 
-    const attackRecovered = await recoverMessageAddress({
-      message: attackMessage(address, nonce),
-      signature: attackSignature,
-    }).catch(() => null);
-    if (!attackRecovered || attackRecovered.toLowerCase() !== sessionAddress.toLowerCase()) {
-      return NextResponse.json({ error: "bad attack signature" }, { status: 401 });
-    }
+    const hash = await walletClient.writeContract({
+      address: FOGPOT_ADDRESS,
+      abi: fogpotAbi,
+      functionName: "attackFor",
+      args: [
+        player,
+        guessCiphertext,
+        sessionKey,
+        BigInt(expiresAtSec),
+        authSignature,
+        BigInt(nonce),
+        attackSignature,
+      ],
+      value: fee,
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return NextResponse.json({ ok: true, hash });
+  } catch (err: any) {
+    // Surface contract revert reasons (bad nonce, expired session, bad signature, ...)
+    // so the frontend can decide whether to restart the session or just retry.
+    return NextResponse.json(
+      { error: err?.shortMessage ?? err?.message ?? "relay failed" },
+      { status: 500 }
+    );
   }
-
-  const { state, hit, crit } = applyAttack(address);
-  return NextResponse.json({ hit, crit, state });
 }

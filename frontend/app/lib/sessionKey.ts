@@ -1,33 +1,62 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { FOGPOT_ADDRESS } from "./fogpotContract";
+import { publicClient } from "./viemClients";
 
 const STORAGE_KEY = "fogpot:session-key";
 const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+const CHAIN_ID = 84532; // Base Sepolia
 
 export type Session = {
   privateKey: `0x${string}`;
   sessionAddress: `0x${string}`;
-  owner: string;
-  expiresAt: number;
-  authSignature: string;
+  owner: `0x${string}`;
+  expiresAt: number; // ms, for "session expires in..." UI display only
+  expiresAtSec: number; // unix seconds — the exact value signed into SessionAuth; send this to attackFor
+  authSignature: `0x${string}`;
+  nonce: number; // next attackNonce() to submit on-chain
 };
 
-// Same message the server reconstructs to verify the owner really
-// authorized this burner key — must stay in sync with api/boss/attack.
-export function authMessage(sessionAddress: string, owner: string, expiresAt: number) {
-  return [
-    "FogPot session key authorization",
-    "",
-    `Owner: ${owner}`,
-    `Session key: ${sessionAddress}`,
-    `Expires: ${new Date(expiresAt).toISOString()}`,
-    "",
-    "This key can attack the boss on your behalf until it expires.",
-    "It cannot move funds or approve spending.",
-  ].join("\n");
+// Same EIP-712 domain + struct hashes FogPot.sol verifies onchain in attackFor() —
+// keep these in sync with contracts/src/FogPot.sol.
+const domain = {
+  name: "FogPot",
+  version: "1",
+  chainId: CHAIN_ID,
+  verifyingContract: FOGPOT_ADDRESS,
+} as const;
+
+const sessionAuthTypes = {
+  SessionAuth: [
+    { name: "owner", type: "address" },
+    { name: "sessionKey", type: "address" },
+    { name: "expiresAt", type: "uint256" },
+  ],
+} as const;
+
+const attackTypes = {
+  Attack: [
+    { name: "owner", type: "address" },
+    { name: "sessionKey", type: "address" },
+    { name: "nonce", type: "uint256" },
+  ],
+} as const;
+
+function sessionAuthTypedData(sessionAddress: `0x${string}`, owner: `0x${string}`, expiresAtSec: bigint) {
+  return {
+    domain,
+    types: sessionAuthTypes,
+    primaryType: "SessionAuth" as const,
+    message: { owner, sessionKey: sessionAddress, expiresAt: expiresAtSec },
+  };
 }
 
-export function attackMessage(owner: string, nonce: string) {
-  return `FogPot attack\nowner:${owner}\nnonce:${nonce}`;
+function attackTypedData(owner: `0x${string}`, sessionAddress: `0x${string}`, nonce: bigint) {
+  return {
+    domain,
+    types: attackTypes,
+    primaryType: "Attack" as const,
+    message: { owner, sessionKey: sessionAddress, nonce },
+  };
 }
 
 export function loadSession(owner: string | null): Session | null {
@@ -49,29 +78,64 @@ export function clearSession() {
   window.sessionStorage.removeItem(STORAGE_KEY);
 }
 
+function persist(session: Session) {
+  if (typeof window !== "undefined") {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+  }
+  return session;
+}
+
+/// One-time wallet signature: authorizes a fresh burner "session key" to attack on
+/// the owner's behalf until it expires. Every attack after this is signed locally
+/// by the burner key (signAttack below) — no further wallet popups.
 export async function createSession(
-  owner: string,
-  signMessage: (message: string) => Promise<string>
+  owner: `0x${string}`,
+  signTypedData: (typedData: ReturnType<typeof sessionAuthTypedData>) => Promise<string>
 ): Promise<Session> {
   const privateKey = generatePrivateKey();
   const account = privateKeyToAccount(privateKey);
   const expiresAt = Date.now() + SESSION_TTL_MS;
-  const authSignature = await signMessage(authMessage(account.address, owner, expiresAt));
+  const expiresAtSec = Math.floor(expiresAt / 1000);
 
-  const session: Session = {
+  const [authSignature, startNonce] = await Promise.all([
+    signTypedData(sessionAuthTypedData(account.address, owner, BigInt(expiresAtSec))),
+    publicClient.readContract({
+      address: FOGPOT_ADDRESS,
+      abi: [
+        {
+          type: "function",
+          name: "attackNonce",
+          stateMutability: "view",
+          inputs: [{ name: "", type: "address" }],
+          outputs: [{ type: "uint256" }],
+        },
+      ] as const,
+      functionName: "attackNonce",
+      args: [owner],
+    }),
+  ]);
+
+  return persist({
     privateKey,
     sessionAddress: account.address,
     owner,
     expiresAt,
-    authSignature,
-  };
-  window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-  return session;
+    expiresAtSec,
+    authSignature: authSignature as `0x${string}`,
+    nonce: Number(startNonce),
+  });
 }
 
-export async function signAttack(session: Session): Promise<{ signature: string; nonce: string }> {
+/// Signs the next attack locally with the burner key — instant, no wallet prompt.
+export async function signAttack(session: Session): Promise<{ signature: `0x${string}`; nonce: number }> {
   const account = privateKeyToAccount(session.privateKey);
-  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const signature = await account.signMessage({ message: attackMessage(session.owner, nonce) });
-  return { signature, nonce };
+  const signature = await account.signTypedData(
+    attackTypedData(session.owner, session.sessionAddress, BigInt(session.nonce))
+  );
+  return { signature, nonce: session.nonce };
+}
+
+/// Call after a relayed attack lands so the next signAttack() uses the right nonce.
+export function advanceSessionNonce(session: Session): Session {
+  return persist({ ...session, nonce: session.nonce + 1 });
 }

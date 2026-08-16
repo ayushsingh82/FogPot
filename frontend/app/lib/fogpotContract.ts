@@ -1,5 +1,5 @@
 // Base Sepolia — see README.md "Deployed contract" for the live addresses.
-export const FOGPOT_ADDRESS = "0xf703704ab36dfb9f12201de5eb60c708744bcf2e" as const;
+export const FOGPOT_ADDRESS = "0x99e67e1c28a707fe62072ef72663675be9ee14c0" as const;
 export const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
 export const ATTACK_FEE = BigInt(10_000); // 0.01 USDC, 6 decimals
 
@@ -10,6 +10,28 @@ export const fogpotAbi = [
     stateMutability: "payable",
     inputs: [{ name: "guessCiphertext", type: "bytes" }],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "attackFor",
+    stateMutability: "payable",
+    inputs: [
+      { name: "player", type: "address" },
+      { name: "guessCiphertext", type: "bytes" },
+      { name: "sessionKey", type: "address" },
+      { name: "expiresAt", type: "uint256" },
+      { name: "authSignature", type: "bytes" },
+      { name: "nonce", type: "uint256" },
+      { name: "attackSignature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "attackNonce",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ type: "uint256" }],
   },
   {
     type: "function",

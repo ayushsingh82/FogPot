@@ -17,6 +17,7 @@ type WalletState = {
   connect: () => Promise<void>;
   disconnect: () => void;
   signMessage: (message: string) => Promise<string>;
+  signTypedData: (typedData: unknown) => Promise<string>;
 };
 
 const WalletContext = createContext<WalletState | null>(null);
@@ -145,9 +146,37 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [address]
   );
 
+  const signTypedData = useCallback(
+    async (typedData: unknown) => {
+      const eth = getEthereum();
+      if (!eth || !address) throw new Error("wallet not connected");
+      await ensureBaseSepolia(eth);
+      // MetaMask's eth_signTypedData_v4 wants a JSON string, and JSON can't carry
+      // bigint (used for uint256 fields like expiresAt/nonce) — stringify by hand.
+      const payload = JSON.stringify(typedData, (_key, value) =>
+        typeof value === "bigint" ? value.toString() : value
+      );
+      return eth.request({
+        method: "eth_signTypedData_v4",
+        params: [address, payload],
+      });
+    },
+    [address]
+  );
+
   return (
     <WalletContext.Provider
-      value={{ address, connecting, hasProvider, wrongNetwork, error, connect, disconnect, signMessage }}
+      value={{
+        address,
+        connecting,
+        hasProvider,
+        wrongNetwork,
+        error,
+        connect,
+        disconnect,
+        signMessage,
+        signTypedData,
+      }}
     >
       {children}
     </WalletContext.Provider>
