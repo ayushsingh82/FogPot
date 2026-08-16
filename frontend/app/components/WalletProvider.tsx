@@ -7,6 +7,8 @@ import {
   useEffect,
   useState,
 } from "react";
+import { createWalletClient, custom } from "viem";
+import { baseSepolia } from "viem/chains";
 
 type WalletState = {
   address: string | null;
@@ -147,19 +149,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signTypedData = useCallback(
-    async (typedData: unknown) => {
+    async (typedData: any) => {
       const eth = getEthereum();
       if (!eth || !address) throw new Error("wallet not connected");
       await ensureBaseSepolia(eth);
-      // MetaMask's eth_signTypedData_v4 wants a JSON string, and JSON can't carry
-      // bigint (used for uint256 fields like expiresAt/nonce) — stringify by hand.
-      const payload = JSON.stringify(typedData, (_key, value) =>
-        typeof value === "bigint" ? value.toString() : value
-      );
-      return eth.request({
-        method: "eth_signTypedData_v4",
-        params: [address, payload],
+      // Go through viem's wallet client rather than hand-rolling the raw
+      // eth_signTypedData_v4 RPC call — viem fills in the EIP712Domain type array
+      // (required by the JSON-RPC method) itself. Without it, MetaMask still
+      // returns *a* signature, just against the wrong domain hash, so it looks
+      // fine client-side and only fails onchain as "bad session authorization".
+      const wallet = createWalletClient({
+        chain: baseSepolia,
+        transport: custom(eth),
+        account: address as `0x${string}`,
       });
+      return wallet.signTypedData(typedData);
     },
     [address]
   );
