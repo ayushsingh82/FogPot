@@ -21,6 +21,7 @@ type BossState = {
   hpPct: number;
   defeated: boolean;
   poolUsd: number;
+  attackCount: number;
   attackers: string[];
   thresholdCheckPending: boolean;
 };
@@ -33,6 +34,7 @@ const EMPTY_BOSS: BossState = {
   hpPct: 100,
   defeated: false,
   poolUsd: 0,
+  attackCount: 0,
   attackers: [],
   thresholdCheckPending: false,
 };
@@ -81,6 +83,10 @@ export default function RaidPage() {
         hpPct: Number(hpPct),
         defeated,
         poolUsd: Number(pooledFees) / 1e6,
+        // Every attack, hit or miss, adds exactly ATTACK_FEE to the pool — so this
+        // is an exact count straight off pooledFees, proof attacks are landing
+        // even while the coarse HP % looks frozen.
+        attackCount: Number(pooledFees / ATTACK_FEE),
         attackers: [...attackers],
         thresholdCheckPending,
       });
@@ -252,6 +258,12 @@ export default function RaidPage() {
         <div className="hp-label">
           <span>{hpPct}% HP (coarse — exact HP stays encrypted)</span>
           <span>{boss.defeated ? "DEFEATED" : "ALIVE"}</span>
+        </div>
+        <div className="hp-label">
+          <span>
+            {boss.attackCount} ATTACK{boss.attackCount === 1 ? "" : "S"} LANDED ONCHAIN
+          </span>
+          <span>POOL ${boss.poolUsd.toFixed(2)}</span>
         </div>
 
         <div className="fog-note">
